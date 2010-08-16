@@ -66,10 +66,11 @@ class ELBConnection(AWSQueryConnection):
         :rtype: list
         :return: A list of :class:`boto.ec2.elb.loadbalancer.LoadBalancer`
         """
+        if isinstance(load_balancer_name, str):
+            load_balancer_name = [load_balancer_name]
         params = {}
         if load_balancer_name:
-            #self.build_list_params(params, load_balancer_names, 'LoadBalancerName.%d')
-            params['LoadBalancerName'] = load_balancer_name
+            self.build_list_params(params, load_balancer_name, 'LoadBalancerNames.member.%s')
         return self.get_list('DescribeLoadBalancers', params, [('member', LoadBalancer)])
 
 
