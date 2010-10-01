@@ -14,7 +14,7 @@
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
 # OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABIL-
 # ITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-# SHALL THE AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, 
+# SHALL THE AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
 # WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 # IN THE SOFTWARE.
@@ -26,7 +26,7 @@ class DBInstance(object):
     """
     Represents a RDS  DBInstance
     """
-    
+
     def __init__(self, connection=None, id=None):
         self.connection = connection
         self.id = id
@@ -39,6 +39,7 @@ class DBInstance(object):
         self.master_username = None
         self.parameter_group = None
         self.security_group = None
+        self.pending_modified_values = {}
         self.availability_zone = None
         self.backup_retention_period = None
         self.preferred_backup_window = None
@@ -46,6 +47,7 @@ class DBInstance(object):
         self.latest_restorable_time = None
         self.multi_az = False
         self._in_endpoint = False
+        self._in_pending_modifications = False
         self._port = None
         self._address = None
 
@@ -55,6 +57,8 @@ class DBInstance(object):
     def startElement(self, name, attrs, connection):
         if name == 'Endpoint':
             self._in_endpoint = True
+        elif name == 'PendingModifiedValues':
+            self._in_pending_modifications = True
         elif name == 'DBParameterGroup':
             self.parameter_group = ParameterGroup(self.connection)
             return self.parameter_group
@@ -75,14 +79,25 @@ class DBInstance(object):
         elif name == 'DBInstanceStatus':
             self.status = value
         elif name == 'AllocatedStorage':
-            self.allocated_storage = int(value)
+            if self._in_pending_modifications:
+                self.pending_modified_values['allocated_storage'] = int(value)
+            else:
+                self.allocated_storage = int(value)
         elif name == 'DBInstanceClass':
-            self.instance_class = value
+            if self._in_pending_modifications:
+                self.pending_modified_values['instance_class'] = value
+            else:
+                self.instance_class = value
         elif name == 'MasterUsername':
             self.master_username = value
+        elif name == 'MasterPassword':
+            if self._in_pending_modifications:
+                self.pending_modified_values['master_password'] = value
         elif name == 'Port':
             if self._in_endpoint:
                 self._port = int(value)
+            if self._in_pending_modifications:
+                self.pending_modified_values['port'] = int(value)
         elif name == 'Address':
             if self._in_endpoint:
                 self._address = value
@@ -92,7 +107,10 @@ class DBInstance(object):
         elif name == 'AvailabilityZone':
             self.availability_zone = value
         elif name == 'BackupRetentionPeriod':
-            self.backup_retention_period = value
+            if self._in_pending_modifications:
+                self.pending_modified_values['backup_retention_period'] = value
+            else:
+                self.backup_retention_period = value
         elif name == 'LatestRestorableTime':
             self.latest_restorable_time = value
         elif name == 'PreferredMaintenanceWindow':
@@ -100,18 +118,25 @@ class DBInstance(object):
         elif name == 'PreferredBackupWindow':
             self.preferred_backup_window = value
         elif name == 'MultiAZ':
+            val = False
             if value.lower() == 'true':
-                self.multi_az = True
+                val = True
+            if self._in_pending_modifications:
+                self.pending_modified_values['multi_az'] = val
+            else:
+                self.multi_az = val
+        elif name == 'PendingModifiedValues':
+            self._in_pending_modifications = False
         else:
             setattr(self, name, value)
 
     def snapshot(self, snapshot_id):
         """
         Create a new DB snapshot of this DBInstance.
-        
+
         :type identifier: string
         :param identifier: The identifier for the DBSnapshot
-        
+
         :rtype: :class:`boto.rds.dbsnapshot.DBSnapshot`
         :return: The newly created DBSnapshot
         """
@@ -120,7 +145,7 @@ class DBInstance(object):
     def reboot(self):
         """
         Reboot this DBInstance
-        
+
         :rtype: :class:`boto.rds.dbsnapshot.DBSnapshot`
         :return: The newly created DBSnapshot
         """
@@ -147,3 +172,4 @@ class DBInstance(object):
         return self.connection.delete_dbinstance(self.id,
                                                  skip_final_snapshot,
                                                  final_snapshot_id)
+
