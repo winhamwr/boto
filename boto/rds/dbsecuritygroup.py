@@ -114,7 +114,7 @@ class DBSecurityGroup(object):
             self.name,
             cidr_ip=cidr_ip,
             ec2_security_group_name=group_name,
-            ec2_security_group_owner=group_owner_id)
+            ec2_security_group_owner_id=group_owner_id)
 
 class IPRange(object):
 
