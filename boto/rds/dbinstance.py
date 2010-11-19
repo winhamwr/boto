@@ -14,7 +14,7 @@
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
 # OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABIL-
 # ITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-# SHALL THE AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, 
+# SHALL THE AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
 # WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 # IN THE SOFTWARE.
@@ -26,7 +26,7 @@ class DBInstance(object):
     """
     Represents a RDS  DBInstance
     """
-    
+
     def __init__(self, connection=None, id=None):
         self.connection = connection
         self.id = id
@@ -39,13 +39,13 @@ class DBInstance(object):
         self.master_username = None
         self.parameter_group = None
         self.security_group = None
+        self.pending_modified_values = {}
         self.availability_zone = None
         self.backup_retention_period = None
         self.preferred_backup_window = None
         self.preferred_maintenance_window = None
         self.latest_restorable_time = None
         self.multi_az = False
-        self.pending_modified_values = None
         self._in_endpoint = False
         self._port = None
         self._address = None
@@ -112,10 +112,10 @@ class DBInstance(object):
     def snapshot(self, snapshot_id):
         """
         Create a new DB snapshot of this DBInstance.
-        
+
         :type identifier: string
         :param identifier: The identifier for the DBSnapshot
-        
+
         :rtype: :class:`boto.rds.dbsnapshot.DBSnapshot`
         :return: The newly created DBSnapshot
         """
@@ -124,7 +124,7 @@ class DBInstance(object):
     def reboot(self):
         """
         Reboot this DBInstance
-        
+
         :rtype: :class:`boto.rds.dbsnapshot.DBSnapshot`
         :return: The newly created DBSnapshot
         """
@@ -210,7 +210,7 @@ class DBInstance(object):
                                apply_immediately is True.
 
                                Valid values are:
-                               
+
                                * db.m1.small
                                * db.m1.large
                                * db.m1.xlarge
@@ -252,13 +252,20 @@ class DBInstance(object):
                                                  preferred_backup_window,
                                                  multi_az,
                                                  apply_immediately)
-        
+
 class PendingModifiedValues(dict):
 
     def startElement(self, name, attrs, connection):
         return None
 
     def endElement(self, name, value, connection):
-        if name != 'PendingModifiedValues':
+        if name == 'AllocatedStorage':
+            self[name] = int(value)
+        elif name == 'MultiAZ':
+            if value.lower() == 'true':
+                self[name] = True
+            else:
+                self[name] = False
+        elif name != 'PendingModifiedValues':
             self[name] = value
 
