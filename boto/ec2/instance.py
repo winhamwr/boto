@@ -1,4 +1,5 @@
-# Copyright (c) 2006-2008 Mitch Garnaat http://garnaat.org/
+# Copyright (c) 2006-2010 Mitch Garnaat http://garnaat.org/
+# Copyright (c) 2010, Eucalyptus Systems, Inc.
 #
 # Permission is hereby granted, free of charge, to any person obtaining a
 # copy of this software and associated documentation files (the
@@ -23,7 +24,7 @@
 Represents an EC2 Instance
 """
 import boto
-from boto.ec2.ec2object import EC2Object
+from boto.ec2.ec2object import EC2Object, TaggedEC2Object
 from boto.resultset import ResultSet
 from boto.ec2.address import Address
 from boto.ec2.blockdevicemapping import BlockDeviceMapping
@@ -64,10 +65,10 @@ class Reservation(EC2Object):
         for instance in self.instances:
             instance.stop()
             
-class Instance(EC2Object):
+class Instance(TaggedEC2Object):
     
     def __init__(self, connection=None):
-        EC2Object.__init__(self, connection)
+        TaggedEC2Object.__init__(self, connection)
         self.id = None
         self.dns_name = None
         self.public_dns_name = None
@@ -101,11 +102,15 @@ class Instance(EC2Object):
         self.block_device_mapping = None
         self.state_reason = None
         self.group_name = None
+        self.client_token = None
 
     def __repr__(self):
         return 'Instance:%s' % self.id
 
     def startElement(self, name, attrs, connection):
+        retval = TaggedEC2Object.startElement(self, name, attrs, connection)
+        if retval is not None:
+            return retval
         if name == 'monitoring':
             self._in_monitoring_element = True
         elif name == 'blockDeviceMapping':
@@ -189,30 +194,60 @@ class Instance(EC2Object):
         elif name == 'groupName':
             if self._in_monitoring_element:
                 self.group_name = value
+        elif name == 'clientToken':
+            self.client_token = value
         else:
             setattr(self, name, value)
 
     def _update(self, updated):
         self.__dict__.update(updated.__dict__)
 
-    def update(self):
+    def update(self, validate=False):
+        """
+        Update the instance's state information by making a call to fetch
+        the current instance attributes from the service.
+
+        :type validate: bool
+        :param validate: By default, if EC2 returns no data about the
+                         instance the update method returns quietly.  If
+                         the validate param is True, however, it will
+                         raise a ValueError exception if no data is
+                         returned from EC2.
+        """
         rs = self.connection.get_all_instances([self.id])
         if len(rs) > 0:
             r = rs[0]
             for i in r.instances:
                 if i.id == self.id:
                     self._update(i)
+        elif validate:
+            raise ValueError('%s is not a valid Instance ID' % self.id)
         return self.state
 
     def terminate(self):
+        """
+        Terminate the instance
+        """
         rs = self.connection.terminate_instances([self.id])
         self._update(rs[0])
 
-    def stop(self):
+    def stop(self, force=False):
+        """
+        Stop the instance
+
+        :type force: bool
+        :param force: Forces the instance to stop
+        
+        :rtype: list
+        :return: A list of the instances stopped
+        """
         rs = self.connection.stop_instances([self.id])
         self._update(rs[0])
 
     def start(self):
+        """
+        Start the instance.
+        """
         rs = self.connection.start_instances([self.id])
         self._update(rs[0])
 
@@ -220,6 +255,12 @@ class Instance(EC2Object):
         return self.connection.reboot_instances([self.id])
 
     def get_console_output(self):
+        """
+        Retrieves the console output for the instance.
+
+        :rtype: :class:`boto.ec2.instance.ConsoleOutput`
+        :return: The console output as a ConsoleOutput object
+        """
         return self.connection.get_console_output(self.id)
 
     def confirm_product(self, product_code):
@@ -235,6 +276,61 @@ class Instance(EC2Object):
 
     def unmonitor(self):
         return self.connection.unmonitor_instance(self.id)
+
+    def get_attribute(self, attribute):
+        """
+        Gets an attribute from this instance.
+
+        :type attribute: string
+        :param attribute: The attribute you need information about
+                          Valid choices are:
+                          instanceType|kernel|ramdisk|userData|
+                          disableApiTermination|
+                          instanceInitiatedShutdownBehavior|
+                          rootDeviceName|blockDeviceMapping
+
+        :rtype: :class:`boto.ec2.image.InstanceAttribute`
+        :return: An InstanceAttribute object representing the value of the
+                 attribute requested
+        """
+        return self.connection.describe_attribute(self.id, attribute)
+
+    def modify_attribute(self, attribute, value):
+        """
+        Changes an attribute of this instance
+
+        :type attribute: string
+        :param attribute: The attribute you wish to change.
+                          AttributeName - Expected value (default)
+                          instanceType - A valid instance type (m1.small)
+                          kernel - Kernel ID (None)
+                          ramdisk - Ramdisk ID (None)
+                          userData - Base64 encoded String (None)
+                          disableApiTermination - Boolean (true)
+                          instanceInitiatedShutdownBehavior - stop|terminate
+                          rootDeviceName - device name (None)
+
+        :type value: string
+        :param value: The new value for the attribute
+
+        :rtype: bool
+        :return: Whether the operation succeeded or not
+        """
+        return self.connection.modify_instance_attribute(self.id, attribute,
+                                                         value)
+
+    def reset_attribute(self, attribute):
+        """
+        Resets an attribute of this instance to its default value.
+
+        :type attribute: string
+        :param attribute: The attribute to reset. Valid values are:
+                          kernel|ramdisk
+
+        :rtype: bool
+        :return: Whether the operation succeeded or not
+        """
+        return self.connection.reset_instance_attribute(self.id, attribute)
 
 class Group:
 

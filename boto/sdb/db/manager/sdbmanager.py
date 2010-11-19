@@ -103,7 +103,7 @@ class SDBConverter:
             if Model in item_type.mro():
                 item_type = Model
             encoded_value = self.encode(item_type, value[key])
-            if encoded_value != None and encoded_value != "None":
+            if encoded_value != None:
                 new_value.append('%s:%s' % (key, encoded_value))
         return new_value
 
@@ -122,7 +122,7 @@ class SDBConverter:
             item_type = getattr(prop, "item_type")
             dec_val = {}
             for val in value:
-                if val != "None" and val != None:
+                if val != None:
                     k,v = self.decode_map_element(item_type, val)
                     try:
                         k = int(k)
@@ -272,7 +272,7 @@ class SDBConverter:
 
     def encode_reference(self, value):
         if value in (None, 'None', '', ' '):
-            return 'None'
+            return None
         if isinstance(value, str) or isinstance(value, unicode):
             return value
         else:
@@ -438,27 +438,31 @@ class SDBManager(object):
         return self.get_object(None, id)
 
     def query(self, query):
-        query_str = "select * from `%s` %s" % (self.domain.name, self._build_filter_part(query.model_class, query.filters, query.sort_by))
+        query_str = "select * from `%s` %s" % (self.domain.name, self._build_filter_part(query.model_class, query.filters, query.sort_by, query.select))
         if query.limit:
             query_str += " limit %s" % query.limit
         rs = self.domain.select(query_str, max_items=query.limit, next_token = query.next_token)
         query.rs = rs
         return self._object_lister(query.model_class, rs)
 
-    def count(self, cls, filters):
+    def count(self, cls, filters, quick=True, sort_by=None, select=None):
         """
         Get the number of results that would
         be returned in this query
         """
-        query = "select count(*) from `%s` %s" % (self.domain.name, self._build_filter_part(cls, filters))
-        count =  int(self.domain.select(query).next()["Count"])
+        query = "select count(*) from `%s` %s" % (self.domain.name, self._build_filter_part(cls, filters, sort_by, select))
+        count = 0
+        for row in self.domain.select(query):
+            count += int(row['Count'])
+            if quick:
+                return count
         return count
 
 
     def _build_filter(self, property, name, op, val):
         if val == None:
             if op in ('is','='):
-                return "`%s` is null" % name
+                return "`%(name)s` is null" % {"name": name}
             elif op in ('is not', '!='):
                 return "`%s` is not null" % name
             else:
@@ -472,7 +476,7 @@ class SDBManager(object):
                 val = "%%:%s" % val
         return "`%s` %s '%s'" % (name, op, val.replace("'", "''"))
 
-    def _build_filter_part(self, cls, filters, order_by=None):
+    def _build_filter_part(self, cls, filters, order_by=None, select=None):
         """
         Build the filter part
         """
@@ -481,10 +485,15 @@ class SDBManager(object):
         order_by_filtered = False
         if order_by:
             if order_by[0] == "-":
-                order_by_method = "desc";
+                order_by_method = "DESC";
                 order_by = order_by[1:]
             else:
-                order_by_method = "asc";
+                order_by_method = "ASC";
+        if isinstance(filters, str) or isinstance(filters, unicode):
+            query = "WHERE `__type__` = '%s' AND %s" % (cls.__name__, filters)
+            if order_by != None:
+                query += " ORDER BY `%s` %s" % (order_by, order_by_method)
+            return query
 
         for filter in filters:
             filter_parts = []
@@ -506,7 +515,7 @@ class SDBManager(object):
                                 filter_parts_sub.append(self._build_filter(property, name, op, v))
                         else:
                             filter_parts_sub.append(self._build_filter(property, name, op, val))
-                    filter_parts.append("(%s)" % (" or ".join(filter_parts_sub)))
+                    filter_parts.append("(%s)" % (" OR ".join(filter_parts_sub)))
                 else:
                     val = self.encode_value(property, value)
                     if isinstance(val, list):
@@ -526,11 +535,14 @@ class SDBManager(object):
         order_by_query = ""
         if order_by:
             if not order_by_filtered:
-                query_parts.append("`%s` like '%%'" % order_by)
-            order_by_query = " order by `%s` %s" % (order_by, order_by_method)
+                query_parts.append("`%s` LIKE '%%'" % order_by)
+            order_by_query = " ORDER BY `%s` %s" % (order_by, order_by_method)
+
+        if select:
+            query_parts.append("(%s)" % select)
 
         if len(query_parts) > 0:
-            return "where %s %s" % (" and ".join(query_parts), order_by_query)
+            return "WHERE %s %s" % (" AND ".join(query_parts), order_by_query)
         else:
             return ""
 
@@ -553,12 +565,16 @@ class SDBManager(object):
         attrs = {'__type__' : obj.__class__.__name__,
                  '__module__' : obj.__class__.__module__,
                  '__lineage__' : obj.get_lineage()}
+        del_attrs = []
         for property in obj.properties(hidden=False):
             value = property.get_value_for_datastore(obj)
             if value is not None:
                 value = self.encode_value(property, value)
             if value == []:
                 value = None
+            if value == None:
+                del_attrs.append(property.name)
+                continue
             attrs[property.name] = value
             if property.unique:
                 try:
@@ -569,6 +585,9 @@ class SDBManager(object):
                 except(StopIteration):
                     pass
         self.domain.put_attributes(obj.id, attrs, replace=True)
+        if len(del_attrs) > 0:
+            self.domain.delete_attributes(obj.id, del_attrs)
+        return obj
 
     def delete_object(self, obj):
         self.domain.delete_attributes(obj.id)

@@ -1,4 +1,5 @@
-# Copyright (c) 2006,2007 Mitch Garnaat http://garnaat.org/
+# Copyright (c) 2006-2010 Mitch Garnaat http://garnaat.org/
+# Copyright (c) 2010, Eucalyptus Systems, Inc.
 #
 # Permission is hereby granted, free of charge, to any person obtaining a
 # copy of this software and associated documentation files (the
@@ -19,7 +20,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 # IN THE SOFTWARE.
 
-from boto.ec2.ec2object import EC2Object
+from boto.ec2.ec2object import EC2Object, TaggedEC2Object
 from boto.ec2.blockdevicemapping import BlockDeviceMapping
 
 class ProductCodes(list):
@@ -31,17 +32,18 @@ class ProductCodes(list):
         if name == 'productCode':
             self.append(value)
     
-class Image(EC2Object):
+class Image(TaggedEC2Object):
     """
     Represents an EC2 Image
     """
     
     def __init__(self, connection=None):
-        EC2Object.__init__(self, connection)
+        TaggedEC2Object.__init__(self, connection)
         self.id = None
         self.location = None
         self.state = None
-        self.ownerId = None
+        self.ownerId = None  # for backwards compatibility
+        self.owner_id = None
         self.owner_alias = None
         self.is_public = False
         self.architecture = None
@@ -60,6 +62,9 @@ class Image(EC2Object):
         return 'Image:%s' % self.id
 
     def startElement(self, name, attrs, connection):
+        retval = TaggedEC2Object.startElement(self, name, attrs, connection)
+        if retval is not None:
+            return retval
         if name == 'blockDeviceMapping':
             self.block_device_mapping = BlockDeviceMapping()
             return self.block_device_mapping
@@ -76,7 +81,8 @@ class Image(EC2Object):
         elif name == 'imageState':
             self.state = value
         elif name == 'imageOwnerId':
-            self.ownerId = value
+            self.ownerId = value # for backwards compatibility
+            self.owner_id = value
         elif name == 'isPublic':
             if value == 'false':
                 self.is_public = False
@@ -112,6 +118,30 @@ class Image(EC2Object):
         else:
             setattr(self, name, value)
 
+    def _update(self, updated):
+        self.__dict__.update(updated.__dict__)
+
+    def update(self, validate=False):
+        """
+        Update the image's state information by making a call to fetch
+        the current image attributes from the service.
+
+        :type validate: bool
+        :param validate: By default, if EC2 returns no data about the
+                         image the update method returns quietly.  If
+                         the validate param is True, however, it will
+                         raise a ValueError exception if no data is
+                         returned from EC2.
+        """
+        rs = self.connection.get_all_images([self.id])
+        if len(rs) > 0:
+            img = rs[0]
+            if img.id == self.id:
+                self._update(img)
+        elif validate:
+            raise ValueError('%s is not a valid Image ID' % self.id)
+        return self.state
+
     def run(self, min_count=1, max_count=1, key_name=None,
             security_groups=None, user_data=None,
             addressing_type=None, instance_type='m1.small', placement=None,
@@ -132,7 +162,7 @@ class Image(EC2Object):
         :param max_count: The maximum number of instances to start
         
         :type key_name: string
-        :param key_name: The keypair to run this instance with.
+        :param key_name: The name of the keypair to run this instance with.
         
         :type security_groups: 
         :param security_groups:
@@ -182,7 +212,7 @@ class Image(EC2Object):
 
         :type instance_initiated_shutdown_behavior: string
         :param instance_initiated_shutdown_behavior: Specifies whether the instance's
-                                                     EBS volues are stopped (i.e. detached)
+                                                     EBS volumes are stopped (i.e. detached)
                                                      or terminated (i.e. deleted) when
                                                      the instance is shutdown by the
                                                      owner.  Valid values are:

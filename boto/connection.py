@@ -182,10 +182,12 @@ class AWSAuthConnection(object):
         if self.provider.host:
             self.host = self.provider.host
 
+        if self.secret_key is None:
+            raise BotoClientError('No credentials have been supplied')
         # initialize an HMAC for signatures, make copies with each request
-        self.hmac = hmac.new(self.aws_secret_access_key, digestmod=sha)
+        self.hmac = hmac.new(self.secret_key, digestmod=sha)
         if sha256:
-            self.hmac_256 = hmac.new(self.aws_secret_access_key, digestmod=sha256)
+            self.hmac_256 = hmac.new(self.secret_key, digestmod=sha256)
         else:
             self.hmac_256 = None
 
@@ -378,7 +380,8 @@ class AWSAuthConnection(object):
         auth = base64.encodestring(self.proxy_user+':'+self.proxy_pass)
         return {'Proxy-Authorization': 'Basic %s' % auth}
 
-    def _mexe(self, method, path, data, headers, host=None, sender=None):
+    def _mexe(self, method, path, data, headers, host=None, sender=None,
+              override_num_retries=None):
         """
         mexe - Multi-execute inside a loop, retrying multiple times to handle
                transient Internet errors by simply trying again.
@@ -395,7 +398,10 @@ class AWSAuthConnection(object):
         response = None
         body = None
         e = None
-        num_retries = config.getint('Boto', 'num_retries', self.num_retries)
+        if override_num_retries is None:
+            num_retries = config.getint('Boto', 'num_retries', self.num_retries)
+        else:
+            num_retries = override_num_retries
         i = 0
         connection = self.get_http_connection(host, self.is_secure)
         while i <= num_retries:
@@ -452,8 +458,9 @@ class AWSAuthConnection(object):
         else:
             raise BotoClientError('Please report this exception as a Boto Issue!')
 
-    def make_request(self, method, path, headers=None, data='', host=None,
-                     auth_path=None, sender=None):
+    def build_request(self, method, path, headers=None, data='', host=None,
+                      auth_path=None):
+        """Builds a request that can be sent for multiple retries."""
         path = self.get_path(path)
         if headers == None:
             headers = {}
@@ -474,7 +481,15 @@ class AWSAuthConnection(object):
             if isinstance(val, unicode):
                 headers[key] = urllib.quote_plus(val.encode('utf-8'))
         self.add_aws_auth_header(headers, method, request_string)
-        return self._mexe(method, path, data, headers, host, sender)
+        return (path, headers)
+
+    def make_request(self, method, path, headers=None, data='', host=None,
+                     auth_path=None, sender=None, override_num_retries=None):
+        """Makes a request to the server, with stock multiple-retry logic."""
+        (path, headers) = self.build_request(method, path, headers, data, host,
+                                             auth_path)
+        return self._mexe(method, path, data, headers, host, sender,
+                          override_num_retries)
 
     def add_aws_auth_header(self, headers, method, path):
         path = self.get_path(path)
@@ -594,7 +609,7 @@ class AWSQueryConnection(AWSAuthConnection):
         params['Version'] = self.APIVersion
         params['AWSAccessKeyId'] = self.aws_access_key_id
         params['SignatureVersion'] = self.SignatureVersion
-        params['Timestamp'] = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+        params['Timestamp'] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         qs, signature = self.get_signature(params, verb, self.get_path(path))
         if verb == 'POST':
             headers['Content-Type'] = 'application/x-www-form-urlencoded; charset=UTF-8'

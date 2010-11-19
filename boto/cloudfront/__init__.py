@@ -23,6 +23,7 @@
 import xml.sax
 import base64
 import time
+import boto
 from boto.connection import AWSAuthConnection
 from boto import handler
 from boto.cloudfront.distribution import Distribution, DistributionSummary, DistributionConfig
@@ -30,13 +31,14 @@ from boto.cloudfront.distribution import StreamingDistribution, StreamingDistrib
 from boto.cloudfront.identity import OriginAccessIdentity
 from boto.cloudfront.identity import OriginAccessIdentitySummary
 from boto.cloudfront.identity import OriginAccessIdentityConfig
+from boto.cloudfront.invalidation import InvalidationBatch
 from boto.resultset import ResultSet
 from boto.cloudfront.exception import CloudFrontServerError
 
 class CloudFrontConnection(AWSAuthConnection):
 
     DefaultHost = 'cloudfront.amazonaws.com'
-    Version = '2009-12-01'
+    Version = '2010-08-01'
 
     def __init__(self, aws_access_key_id=None, aws_secret_access_key=None,
                  port=None, proxy=None, proxy_port=None,
@@ -69,6 +71,7 @@ class CloudFrontConnection(AWSAuthConnection):
             tags=[('DistributionSummary', DistributionSummary)]
         response = self.make_request('GET', '/%s/%s' % (self.Version, resource))
         body = response.read()
+        boto.log.debug(body)
         if response.status >= 300:
             raise CloudFrontServerError(response.status, response.reason, body)
         rs = ResultSet(tags)
@@ -80,6 +83,7 @@ class CloudFrontConnection(AWSAuthConnection):
         uri = '/%s/%s/%s' % (self.Version, resource, id)
         response = self.make_request('GET', uri)
         body = response.read()
+        boto.log.debug(body)
         if response.status >= 300:
             raise CloudFrontServerError(response.status, response.reason, body)
         d = dist_class(connection=self)
@@ -95,6 +99,7 @@ class CloudFrontConnection(AWSAuthConnection):
         uri = '/%s/%s/%s/config' % (self.Version, resource, id)
         response = self.make_request('GET', uri)
         body = response.read()
+        boto.log.debug(body)
         if response.status >= 300:
             raise CloudFrontServerError(response.status, response.reason, body)
         d = config_class(connection=self)
@@ -112,18 +117,21 @@ class CloudFrontConnection(AWSAuthConnection):
         headers = {'If-Match' : etag, 'Content-Type' : 'text/xml'}
         response = self.make_request('PUT', uri, headers, config.to_xml())
         body = response.read()
-        return self.get_etag(response)
+        boto.log.debug(body)
         if response.status != 200:
             raise CloudFrontServerError(response.status, response.reason, body)
+        return self.get_etag(response)
     
     def _create_object(self, config, resource, dist_class):
         response = self.make_request('POST', '/%s/%s' % (self.Version, resource),
                                      {'Content-Type' : 'text/xml'}, data=config.to_xml())
         body = response.read()
+        boto.log.debug(body)
         if response.status == 201:
             d = dist_class(connection=self)
             h = handler.XmlHandler(d, self)
             xml.sax.parseString(body, h)
+            d.etag = self.get_etag(response)
             return d
         else:
             raise CloudFrontServerError(response.status, response.reason, body)
@@ -132,6 +140,7 @@ class CloudFrontConnection(AWSAuthConnection):
         uri = '/%s/%s/%s' % (self.Version, resource, id)
         response = self.make_request('DELETE', uri, {'If-Match' : etag})
         body = response.read()
+        boto.log.debug(body)
         if response.status != 204:
             raise CloudFrontServerError(response.status, response.reason, body)
 
@@ -220,4 +229,24 @@ class CloudFrontConnection(AWSAuthConnection):
         return self._delete_object(access_id, etag,
                                    'origin-access-identity/cloudfront')
 
+    # Object Invalidation
+    
+    def create_invalidation_request(self, distribution_id, paths, caller_reference=None):
+        """Creates a new invalidation request
+            :see: http://docs.amazonwebservices.com/AmazonCloudFront/2010-08-01/APIReference/index.html?CreateInvalidation.html
+        """
+        # We allow you to pass in either an array or
+        # an InvalidationBatch object
+        if not isinstance(paths, InvalidationBatch):
+            paths = InvalidationBatch(paths)
+        paths.connection = self
+        response = self.make_request('POST', '/%s/distribution/%s/invalidation' % (self.Version, distribution_id),
+                                     {'Content-Type' : 'text/xml'}, data=paths.to_xml())
+        body = response.read()
+        if response.status == 201:
+            h = handler.XmlHandler(paths, self)
+            xml.sax.parseString(body, h)
+            return paths
+        else:
+            raise CloudFrontServerError(response.status, response.reason, body)
 

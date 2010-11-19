@@ -32,7 +32,7 @@ import boto
 
 class ELBConnection(AWSQueryConnection):
 
-    APIVersion = boto.config.get('Boto', 'elb_version', '2009-05-15')
+    APIVersion = boto.config.get('Boto', 'elb_version', '2010-07-01')
     Endpoint = boto.config.get('Boto', 'elb_endpoint', 'elasticloadbalancing.amazonaws.com')
     SignatureVersion = '1'
     #ResponseError = EC2ResponseError
@@ -56,21 +56,19 @@ class ELBConnection(AWSQueryConnection):
         for i in range(1, len(items)+1):
             params[label % i] = items[i-1]
 
-    def get_all_load_balancers(self, load_balancer_name=None):
+    def get_all_load_balancers(self, load_balancer_names=None):
         """
         Retrieve all load balancers associated with your account.
 
-        :type load_balancer_names: str
-        :param load_balancer_names: An optional filter string to get only one ELB
+        :type load_balancer_names: list
+        :param load_balancer_names: An optional list of load balancer names
 
         :rtype: list
         :return: A list of :class:`boto.ec2.elb.loadbalancer.LoadBalancer`
         """
-        if isinstance(load_balancer_name, str):
-            load_balancer_name = [load_balancer_name]
         params = {}
-        if load_balancer_name:
-            self.build_list_params(params, load_balancer_name, 'LoadBalancerNames.member.%s')
+        if load_balancer_names:
+            self.build_list_params(params, load_balancer_names, 'LoadBalancerNames.member.%d')
         return self.get_list('DescribeLoadBalancers', params, [('member', LoadBalancer)])
 
 
@@ -106,6 +104,30 @@ class ELBConnection(AWSQueryConnection):
         load_balancer.availability_zones = zones
         return load_balancer
 
+    def create_load_balancer_listeners(self, name, listeners):
+        """
+        Creates a Listener (or group of listeners) for an existing Load Balancer
+
+        :type name: string
+        :param name: The name of the load balancer to create the listeners for
+
+        :type listeners: List of tuples
+        :param listeners: Each tuple contains three values.
+                          (LoadBalancerPortNumber, InstancePortNumber, Protocol)
+                          where LoadBalancerPortNumber and InstancePortNumber are
+                          integer values between 1 and 65535 and Protocol is a
+                          string containing either 'TCP' or 'HTTP'.
+
+        :return: The status of the request
+        """
+        params = {'LoadBalancerName' : name}
+        for i in range(0, len(listeners)):
+            params['Listeners.member.%d.LoadBalancerPort' % (i+1)] = listeners[i][0]
+            params['Listeners.member.%d.InstancePort' % (i+1)] = listeners[i][1]
+            params['Listeners.member.%d.Protocol' % (i+1)] = listeners[i][2]
+        return self.get_status('CreateLoadBalancerListeners', params)
+
+
     def delete_load_balancer(self, name):
         """
         Delete a Load Balancer from your account.
@@ -115,6 +137,25 @@ class ELBConnection(AWSQueryConnection):
         """
         params = {'LoadBalancerName': name}
         return self.get_status('DeleteLoadBalancer', params)
+
+    def delete_load_balancer_listeners(self, name, ports):
+        """
+        Deletes a load balancer listener (or group of listeners)
+
+        :type name: string
+        :param name: The name of the load balancer to create the listeners for
+
+        :type ports: List int
+        :param ports: Each int represents the port on the ELB to be removed
+
+        :return: The status of the request
+        """
+        params = {'LoadBalancerName' : name}
+        for i in range(0, len(ports)):
+            params['LoadBalancerPorts.member.%d' % (i+1)] = ports[i]
+        return self.get_status('DeleteLoadBalancerListeners', params)
+
+
 
     def enable_availability_zones(self, load_balancer_name, zones_to_add):
         """
@@ -213,7 +254,7 @@ class ELBConnection(AWSQueryConnection):
         """
         params = {'LoadBalancerName' : load_balancer_name}
         if instances:
-            self.build_list_params(params, instances, 'instances.member.%d')
+            self.build_list_params(params, instances, 'Instances.member.%d')
         return self.get_list('DescribeInstanceHealth', params, [('member', InstanceState)])
 
     def configure_health_check(self, name, health_check):

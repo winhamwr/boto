@@ -1,4 +1,5 @@
-# Copyright (c) 2006-2009 Mitch Garnaat http://garnaat.org/
+# Copyright (c) 2006-2010 Mitch Garnaat http://garnaat.org/
+# Copyright (c) 2010, Eucalyptus Systems, Inc.
 #
 # Permission is hereby granted, free of charge, to any person obtaining a
 # copy of this software and associated documentation files (the
@@ -22,12 +23,12 @@
 """
 Represents an EC2 Elastic IP Snapshot
 """
-from boto.ec2.ec2object import EC2Object
+from boto.ec2.ec2object import TaggedEC2Object
 
-class Snapshot(EC2Object):
+class Snapshot(TaggedEC2Object):
     
     def __init__(self, connection=None):
-        EC2Object.__init__(self, connection)
+        TaggedEC2Object.__init__(self, connection)
         self.id = None
         self.volume_id = None
         self.status = None
@@ -65,10 +66,22 @@ class Snapshot(EC2Object):
         self.progress = updated.progress
         self.status = updated.status
 
-    def update(self):
+    def update(self, validate=False):
+        """
+        Update the data associated with this snapshot by querying EC2.
+
+        :type validate: bool
+        :param validate: By default, if EC2 returns no data about the
+                         snapshot the update method returns quietly.  If
+                         the validate param is True, however, it will
+                         raise a ValueError exception if no data is
+                         returned from EC2.
+        """
         rs = self.connection.get_all_snapshots([self.id])
         if len(rs) > 0:
             self._update(rs[0])
+        elif validate:
+            raise ValueError('%s is not a valid Snapshot ID' % self.id)
         return self.progress
     
     def delete(self):

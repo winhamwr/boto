@@ -47,7 +47,7 @@ class LoadBalancer(object):
         if name == 'HealthCheck':
             self.health_check = HealthCheck(self)
             return self.health_check
-        elif name == 'Listeners':
+        elif name in ('Listeners', 'ListenerDescriptions'):
             self.listeners = ResultSet([('member', Listener)])
             return self.listeners
         elif name == 'AvailabilityZones':
@@ -135,8 +135,23 @@ class LoadBalancer(object):
         return self.connection.delete_load_balancer(self.name)
 
     def configure_health_check(self, health_check):
-        self.connection.configure_health_check(self.name, health_check)
+        return self.connection.configure_health_check(self.name, health_check)
 
     def get_instance_health(self, instances=None):
-        self.connection.describe_instance_health(self.name, instances)
+        return self.connection.describe_instance_health(self.name, instances)
 
+    def create_listeners(self, listeners):
+        return self.connection.create_load_balancer_listeners(self.name, listeners)
+
+    def create_listener(self, inPort, outPort=None, proto="tcp"):
+        if outPort == None:
+            outPort = inPort
+        return self.create_listeners([(inPort, outPort, proto)])
+
+    def delete_listeners(self, listeners):
+        return self.connection.delete_load_balancer_listeners(self.name, listeners)
+
+    def delete_listener(self, inPort, outPort=None, proto="tcp"):
+        if outPort == None:
+            outPort = inPort
+        return self.delete_listeners([(inPort, outPort, proto)])

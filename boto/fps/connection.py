@@ -1,4 +1,5 @@
 # Copyright (c) 2008 Chris Moyer http://coredumped.org/
+# Copyringt (c) 2010 Jason R. Coombs http://www.jaraco.com/
 #
 # Permission is hereby granted, free of charge, to any person obtaining a
 # copy of this software and associated documentation files (the
@@ -39,7 +40,7 @@ class FPSConnection(AWSQueryConnection):
                  is_secure=True, port=None, proxy=None, proxy_port=None,
                  proxy_user=None, proxy_pass=None,
                  host='fps.sandbox.amazonaws.com', debug=0,
-                 https_connection_factory=None, path=None):
+                 https_connection_factory=None, path="/"):
         AWSQueryConnection.__init__(self, aws_access_key_id, aws_secret_access_key,
                                     is_secure, port, proxy, proxy_port,
                                     proxy_user, proxy_pass, host, debug,
@@ -134,22 +135,41 @@ class FPSConnection(AWSQueryConnection):
         hmac = self.hmac.copy()
         hmac.update(canonical)
         signature = urllib.quote_plus(base64.encodestring(hmac.digest()).strip())
-        
-        return "https://authorize.payments-sandbox.amazon.com%s&awsSignature=%s" % (url, signature)
 
-    def make_payment(self, amount, sender_token, charge_fee_to="Recipient", reference=None, senderReference=None, recipientReference=None, senderDescription=None, recipientDescription=None, callerDescription=None, metadata=None, transactionDate=None):
+        # use the sandbox authorization endpoint if we're using the
+        #  sandbox for API calls.
+        endpoint_host = 'authorize.payments.amazon.com'
+        if 'sandbox' in self.host:
+            endpoint_host = 'authorize.payments-sandbox.amazon.com'
+        fmt = "https://%(endpoint_host)s%(url)s&awsSignature=%(signature)s"
+        return fmt % vars()
+
+    def pay(self, transactionAmount, senderTokenId,
+            recipientTokenId=None, callerTokenId=None,
+            chargeFeeTo="Recipient",
+            callerReference=None, senderReference=None, recipientReference=None,
+            senderDescription=None, recipientDescription=None, callerDescription=None,
+            metadata=None, transactionDate=None, reserve=False):
         """
-        Make a payment transaction
-        You must specify the amount and the sender token.
+        Make a payment transaction. You must specify the amount.
+        This can also perform a Reserve request if 'reserve' is set to True.
         """
         params = {}
-        params['RecipientTokenId'] = boto.config.get("FPS", "recipient_token")
-        params['CallerTokenId'] = boto.config.get("FPS", "caller_token")
-        params['SenderTokenId'] = sender_token
-        params['TransactionAmount.Amount'] = str(amount)
-        params['TransactionAmount.CurrencyCode'] = "USD"
-        params['ChargeFeeTo'] = charge_fee_to
-
+        params['SenderTokenId'] = senderTokenId
+        # this is for 2008-09-17 specification
+        #params['TransactionAmount.Value'] = str(transactionAmount)
+        #params['TransactionAmount.CurrencyCode'] = "USD"
+        params['TransactionAmount'] = str(transactionAmount)
+        params['ChargeFeeTo'] = chargeFeeTo
+        
+        params['RecipientTokenId'] = (
+            recipientTokenId if recipientTokenId is not None
+            else boto.config.get("FPS", "recipient_token")
+            )
+        params['CallerTokenId'] = (
+            callerTokenId if callerTokenId is not None
+            else boto.config.get("FPS", "caller_token")
+            )
         if(transactionDate != None):
             params['TransactionDate'] = transactionDate
         if(senderReference != None):
@@ -164,13 +184,14 @@ class FPSConnection(AWSQueryConnection):
             params['CallerDescription'] = callerDescription
         if(metadata != None):
             params['MetaData'] = metadata
-        if(transactionDate != None):
-            params['TransactionDate'] = transactionDate
-        if(reference == None):
-            reference = uuid.uuid4()
-        params['CallerReference'] = reference
-
-        response = self.make_request("Pay", params)
+        if(callerReference == None):
+            callerReference = uuid.uuid4()
+        params['CallerReference'] = callerReference
+        
+        if reserve:
+            response = self.make_request("Reserve", params)
+        else:
+            response = self.make_request("Pay", params)
         body = response.read()
         if(response.status == 200):
             rs = ResultSet()
@@ -179,3 +200,144 @@ class FPSConnection(AWSQueryConnection):
             return rs
         else:
             raise FPSResponseError(response.status, response.reason, body)
+    
+    def get_transaction_status(self, transactionId):
+        """
+        Returns the status of a given transaction.
+        """
+        params = {}
+        params['TransactionId'] = transactionId
+    
+        response = self.make_request("GetTransactionStatus", params)
+        body = response.read()
+        if(response.status == 200):
+            rs = ResultSet()
+            h = handler.XmlHandler(rs, self)
+            xml.sax.parseString(body, h)
+            return rs
+        else:
+            raise FPSResponseError(response.status, response.reason, body)
+    
+    def cancel(self, transactionId, description=None):
+        """
+        Cancels a reserved or pending transaction.
+        """
+        params = {}
+        params['transactionId'] = transactionId
+        if(description != None):
+            params['description'] = description
+        
+        response = self.make_request("Cancel", params)
+        body = response.read()
+        if(response.status == 200):
+            rs = ResultSet()
+            h = handler.XmlHandler(rs, self)
+            xml.sax.parseString(body, h)
+            return rs
+        else:
+            raise FPSResponseError(response.status, response.reason, body)
+    
+    def settle(self, reserveTransactionId, transactionAmount=None):
+        """
+        Charges for a reserved payment.
+        """
+        params = {}
+        params['ReserveTransactionId'] = reserveTransactionId
+        if(transactionAmount != None):
+            params['TransactionAmount'] = transactionAmount
+        
+        response = self.make_request("Settle", params)
+        body = response.read()
+        if(response.status == 200):
+            rs = ResultSet()
+            h = handler.XmlHandler(rs, self)
+            xml.sax.parseString(body, h)
+            return rs
+        else:
+            raise FPSResponseError(response.status, response.reason, body)
+    
+    def refund(self, callerReference, transactionId, refundAmount=None, callerDescription=None):
+        """
+        Refund a transaction. This refunds the full amount by default unless 'refundAmount' is specified.
+        """
+        params = {}
+        params['CallerReference'] = callerReference
+        params['TransactionId'] = transactionId
+        if(refundAmount != None):
+            params['RefundAmount'] = refundAmount
+        if(callerDescription != None):
+            params['CallerDescription'] = callerDescription
+        
+        response = self.make_request("Refund", params)
+        body = response.read()
+        if(response.status == 200):
+            rs = ResultSet()
+            h = handler.XmlHandler(rs, self)
+            xml.sax.parseString(body, h)
+            return rs
+        else:
+            raise FPSResponseError(response.status, response.reason, body)
+    
+    def get_recipient_verification_status(self, recipientTokenId):
+        """
+        Test that the intended recipient has a verified Amazon Payments account.
+        """
+        params ={}
+        params['RecipientTokenId'] = recipientTokenId
+        
+        response = self.make_request("GetRecipientVerificationStatus", params)
+        body = response.read()
+        if(response.status == 200):
+            rs = ResultSet()
+            h = handler.XmlHandler(rs, self)
+            xml.sax.parseString(body, h)
+            return rs
+        else:
+            raise FPSResponseError(response.status, response.reason, body)
+    
+    def get_token_by_caller_reference(self, callerReference):
+        """
+        Returns details about the token specified by 'callerReference'.
+        """
+        params ={}
+        params['callerReference'] = callerReference
+        
+        response = self.make_request("GetTokenByCaller", params)
+        body = response.read()
+        if(response.status == 200):
+            rs = ResultSet()
+            h = handler.XmlHandler(rs, self)
+            xml.sax.parseString(body, h)
+            return rs
+        else:
+            raise FPSResponseError(response.status, response.reason, body)
+    def get_token_by_caller_token(self, tokenId):
+        """
+        Returns details about the token specified by 'callerReference'.
+        """
+        params ={}
+        params['TokenId'] = tokenId
+        
+        response = self.make_request("GetTokenByCaller", params)
+        body = response.read()
+        if(response.status == 200):
+            rs = ResultSet()
+            h = handler.XmlHandler(rs, self)
+            xml.sax.parseString(body, h)
+            return rs
+        else:
+            raise FPSResponseError(response.status, response.reason, body)
+
+    def verify_signature(self, end_point_url, http_parameters):
+        params = dict(
+            UrlEndPoint = end_point_url,
+            HttpParameters = http_parameters,
+            )
+        response = self.make_request("VerifySignature", params)
+        body = response.read()
+        if(response.status != 200):
+            raise FPSResponseError(response.status, response.reason, body)
+        rs = ResultSet()
+        h = handler.XmlHandler(rs, self)
+        xml.sax.parseString(body, h)
+        return rs

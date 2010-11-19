@@ -38,8 +38,6 @@
 Some handy utility functions used by several classes.
 """
 
-import base64
-import hmac
 import re
 import urllib
 import urllib2
@@ -109,6 +107,8 @@ def canonical_string(method, path, headers, expires=None,
     # ...unless there is an acl or torrent parameter
     if re.search("[&?]acl($|=|&)", path):
         buf += "?acl"
+    elif re.search("[&?]policy($|=|&)", path):
+        buf += "?policy"
     elif re.search("[&?]logging($|=|&)", path):
         buf += "?logging"
     elif re.search("[&?]torrent($|=|&)", path):
@@ -533,6 +533,7 @@ def notify(subject, body=None, html_body=None, to_string=None, attachments=[], a
             from_string = boto.config.get_value('Notification', 'smtp_from', 'boto')
             msg = MIMEMultipart()
             msg['From'] = from_string
+            msg['Reply-To'] = from_string
             msg['To'] = to_string
             msg['Date'] = formatdate(localtime=True)
             msg['Subject'] = subject

@@ -46,10 +46,18 @@ COPY_SOURCE_VERSION_ID_HEADER_KEY = 'copy-source-version-id-header'
 DELETE_MARKER_HEADER_KEY = 'delete-marker-header'
 DATE_HEADER_KEY = 'date-header'
 METADATA_DIRECTIVE_HEADER_KEY = 'metadata-directive-header'
+RESUMABLE_UPLOAD_HEADER_KEY = 'resumable-upload-header'
 SECURITY_TOKEN_HEADER_KEY = 'security-token-header'
 STORAGE_CLASS_HEADER_KEY = 'storage-class'
 MFA_HEADER_KEY = 'mfa-header'
 VERSION_ID_HEADER_KEY = 'version-id-header'
+
+STORAGE_COPY_ERROR = 'StorageCopyError'
+STORAGE_CREATE_ERROR = 'StorageCreateError'
+STORAGE_DATA_ERROR = 'StorageDataError'
+STORAGE_PERMISSIONS_ERROR = 'StoragePermissionsError'
+STORAGE_RESPONSE_ERROR = 'StorageResponseError'
+
 
 class Provider(object):
 
@@ -86,6 +94,7 @@ class Provider(object):
             DELETE_MARKER_HEADER_KEY : AWS_HEADER_PREFIX + 'delete-marker',
             METADATA_DIRECTIVE_HEADER_KEY : AWS_HEADER_PREFIX +
                                             'metadata-directive',
+            RESUMABLE_UPLOAD_HEADER_KEY : None,
             SECURITY_TOKEN_HEADER_KEY : AWS_HEADER_PREFIX + 'security-token',
             VERSION_ID_HEADER_KEY : AWS_HEADER_PREFIX + 'version-id',
             STORAGE_CLASS_HEADER_KEY : AWS_HEADER_PREFIX + 'storage-class',
@@ -103,42 +112,65 @@ class Provider(object):
             DELETE_MARKER_HEADER_KEY : GOOG_HEADER_PREFIX + 'delete-marker',
             METADATA_DIRECTIVE_HEADER_KEY : GOOG_HEADER_PREFIX  +
                                             'metadata-directive',
+            RESUMABLE_UPLOAD_HEADER_KEY : GOOG_HEADER_PREFIX + 'resumable',
             SECURITY_TOKEN_HEADER_KEY : GOOG_HEADER_PREFIX + 'security-token',
             VERSION_ID_HEADER_KEY : GOOG_HEADER_PREFIX + 'version-id',
             STORAGE_CLASS_HEADER_KEY : None,
             MFA_HEADER_KEY : None,
         }
     }
-    
+
+    ErrorMap = {
+        'aws' : {
+            STORAGE_COPY_ERROR : boto.exception.S3CopyError,
+            STORAGE_CREATE_ERROR : boto.exception.S3CreateError,
+            STORAGE_DATA_ERROR : boto.exception.S3DataError,
+            STORAGE_PERMISSIONS_ERROR : boto.exception.S3PermissionsError,
+            STORAGE_RESPONSE_ERROR : boto.exception.S3ResponseError,
+        },
+        'google' : {
+            STORAGE_COPY_ERROR : boto.exception.GSCopyError,
+            STORAGE_CREATE_ERROR : boto.exception.GSCreateError,
+            STORAGE_DATA_ERROR : boto.exception.GSDataError,
+            STORAGE_PERMISSIONS_ERROR : boto.exception.GSPermissionsError,
+            STORAGE_RESPONSE_ERROR : boto.exception.GSResponseError,
+        }
+    }
+
     def __init__(self, name, access_key=None, secret_key=None):
         self.host = None
-        self.access_key = None
-        self.secret_key = None
+        self.access_key = access_key
+        self.secret_key = secret_key
         self.name = name
         self.acl_class = self.AclClassMap[self.name]
         self.canned_acls = self.CannedAclsMap[self.name]
         self.get_credentials(access_key, secret_key)
         self.configure_headers()
+        self.configure_errors()
         # allow config file to override default host
         host_opt_name = '%s_host' % self.HostKeyMap[self.name]
-        if (config.has_option('Credentials', host_opt_name)):
+        if config.has_option('Credentials', host_opt_name):
             self.host = config.get('Credentials', host_opt_name)
 
     def get_credentials(self, access_key=None, secret_key=None):
         access_key_name, secret_key_name = self.CredentialMap[self.name]
-        if access_key:
+        if access_key is not None:
             self.access_key = access_key
         elif os.environ.has_key(access_key_name.upper()):
             self.access_key = os.environ[access_key_name.upper()]
         elif config.has_option('Credentials', access_key_name):
             self.access_key = config.get('Credentials', access_key_name)
 
-        if secret_key:
+        if secret_key is not None:
             self.secret_key = secret_key
         elif os.environ.has_key(secret_key_name.upper()):
             self.secret_key = os.environ[secret_key_name.upper()]
         elif config.has_option('Credentials', secret_key_name):
             self.secret_key = config.get('Credentials', secret_key_name)
+        if isinstance(self.secret_key, unicode):
+            # the secret key must be bytes and not unicode to work
+            #  properly with hmac.new (see http://bugs.python.org/issue5285)
+            self.secret_key = str(self.secret_key)
 
     def configure_headers(self):
         header_info_map = self.HeaderInfoMap[self.name]
@@ -147,15 +179,29 @@ class Provider(object):
         self.acl_header = header_info_map[ACL_HEADER_KEY]
         self.auth_header = header_info_map[AUTH_HEADER_KEY]
         self.copy_source_header = header_info_map[COPY_SOURCE_HEADER_KEY]
-        self.copy_source_version_id = header_info_map[COPY_SOURCE_VERSION_ID_HEADER_KEY]
+        self.copy_source_version_id = header_info_map[
+            COPY_SOURCE_VERSION_ID_HEADER_KEY]
         self.date_header = header_info_map[DATE_HEADER_KEY]
         self.delete_marker = header_info_map[DELETE_MARKER_HEADER_KEY]
         self.metadata_directive_header = (
             header_info_map[METADATA_DIRECTIVE_HEADER_KEY])
         self.security_token_header = header_info_map[SECURITY_TOKEN_HEADER_KEY]
+        self.resumable_upload_header = (
+            header_info_map[RESUMABLE_UPLOAD_HEADER_KEY])
         self.storage_class_header = header_info_map[STORAGE_CLASS_HEADER_KEY]
         self.version_id = header_info_map[VERSION_ID_HEADER_KEY]
         self.mfa_header = header_info_map[MFA_HEADER_KEY]
+
+    def configure_errors(self):
+        error_map = self.ErrorMap[self.name]
+        self.storage_copy_error = error_map[STORAGE_COPY_ERROR]
+        self.storage_create_error = error_map[STORAGE_CREATE_ERROR]
+        self.storage_data_error = error_map[STORAGE_DATA_ERROR]
+        self.storage_permissions_error = error_map[STORAGE_PERMISSIONS_ERROR]
+        self.storage_response_error = error_map[STORAGE_RESPONSE_ERROR]
+
+    def get_provider_name(self):
+        return self.HostKeyMap[self.name]
 
 # Static utility method for getting default Provider.
 def get_default():
