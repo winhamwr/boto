@@ -110,10 +110,10 @@ class DBSecurityGroup(object):
         else:
             group_name = None
             group_owner_id = None
-        return self.connection.revoke_dbsecurity_group(self.name,
-                                                       cidr_ip,
-                                                       group_name,
-                                                       group_owner_id)
+        return self.connection.revoke_security_group(self.name,
+                                                       cidr_ip=cidr_ip,
+                                                       ec2_security_group_name=group_name,
+                                                       ec2_security_group_owner_id=group_owner_id)
 
 class IPRange(object):
 
